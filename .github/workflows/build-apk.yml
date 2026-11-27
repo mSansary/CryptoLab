@@ -1,5 +1,4 @@
 
-
 name: Build Android APK
 
 on:
@@ -18,19 +17,37 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Extract project archives
+        shell: bash
+        run: |
+          extract_root="$RUNNER_TEMP/cryptolab-src"
+          mkdir -p "$extract_root"
+          found=0
+          while IFS= read -r -d '' archive; do
+            echo "Extracting: $archive"
+            unzip -oq "$archive" -d "$extract_root"
+            found=1
+          done < <(find "$GITHUB_WORKSPACE" -type f -iname '*.zip' -not -path '*/.git/*' -print0)
+          if [ "$found" -eq 0 ]; then
+            echo "No ZIP archives found; looking for an already-extracted Flutter project."
+          fi
+
       - name: Find Flutter project
         id: project
         shell: bash
         run: |
-          mapfile -t manifests < <(find . -type f -name pubspec.yaml -not -path '*/.dart_tool/*' -not -path '*/build/*')
+          mapfile -t manifests < <(find "$GITHUB_WORKSPACE" "$RUNNER_TEMP/cryptolab-src" -type f -name pubspec.yaml -not -path '*/.dart_tool/*' -not -path '*/build/*' -not -path '*/.git/*')
           if [ "${#manifests[@]}" -ne 1 ]; then
             echo "::error::Expected exactly one Flutter pubspec.yaml, found ${#manifests[@]}."
+            printf '%s\n' "${manifests[@]}"
             exit 1
           fi
           project_dir="$(dirname "${manifests[0]}")"
           echo "dir=$project_dir" >> "$GITHUB_OUTPUT"
+          echo "Flutter project found at: $project_dir"
 
-      - uses: subosito/flutter-action@v2
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
         with:
           channel: stable
           cache: true
@@ -39,7 +56,7 @@ jobs:
         working-directory: ${{ steps.project.outputs.dir }}
         run: flutter pub get
 
-      - name: Build APK
+      - name: Build release APK
         working-directory: ${{ steps.project.outputs.dir }}
         run: flutter build apk --release
 
