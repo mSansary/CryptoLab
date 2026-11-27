@@ -60,6 +60,10 @@ jobs:
         working-directory: ${{ steps.project.outputs.dir }}
         run: flutter pub get
 
+      - name: Fix Flutter CardTheme compatibility
+        working-directory: ${{ steps.project.outputs.dir }}
+        run: sed -i 's/CardTheme(/CardThemeData(/g' lib/main.dart
+
       - name: Build release APK
         working-directory: ${{ steps.project.outputs.dir }}
         run: flutter build apk --release
