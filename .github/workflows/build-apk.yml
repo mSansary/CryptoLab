@@ -1,5 +1,5 @@
 
-name: Build Android APK
+name: Build CryptoLab APK
 
 on:
   workflow_dispatch:
@@ -7,44 +7,33 @@ on:
     branches:
       - main
 
-permissions:
-  contents: read
+concurrency:
+  group: cryptolab-android-build
+  cancel-in-progress: true
 
 jobs:
   build:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Extract project archives
-        shell: bash
         run: |
-          extract_root="$RUNNER_TEMP/cryptolab-src"
-          mkdir -p "$extract_root"
-          found=0
-          while IFS= read -r -d '' archive; do
-            echo "Extracting: $archive"
-            unzip -oq "$archive" -d "$extract_root"
-            found=1
-          done < <(find "$GITHUB_WORKSPACE" -type f -iname '*.zip' -not -path '*/.git/*' -print0)
-          if [ "$found" -eq 0 ]; then
-            echo "No ZIP archives found; looking for an already-extracted Flutter project."
-          fi
+          find . -name "*.zip" -not -path "./.git/*" -print0 | while IFS= read -r -d '' archive; do
+            unzip -o "$archive" -d .
+          done
 
       - name: Find Flutter project
         id: project
-        shell: bash
         run: |
-          mapfile -t manifests < <(find "$GITHUB_WORKSPACE" "$RUNNER_TEMP/cryptolab-src" -type f -name pubspec.yaml -not -path '*/.dart_tool/*' -not -path '*/build/*' -not -path '*/.git/*')
-          if [ "${#manifests[@]}" -ne 1 ]; then
-            echo "::error::Expected exactly one Flutter pubspec.yaml, found ${#manifests[@]}."
-            printf '%s\n' "${manifests[@]}"
+          mapfile -t files < <(find . -name pubspec.yaml -not -path "./.git/*")
+          if [ "${#files[@]}" -ne 1 ]; then
+            echo "Expected exactly one pubspec.yaml, found ${#files[@]}"
             exit 1
           fi
-          project_dir="$(dirname "${manifests[0]}")"
-          echo "dir=$project_dir" >> "$GITHUB_OUTPUT"
-          echo "Flutter project found at: $project_dir"
+          echo "path=$(dirname "${files[0]}")" >> "$GITHUB_OUTPUT"
 
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
@@ -53,25 +42,45 @@ jobs:
           cache: true
 
       - name: Generate Android platform
-        working-directory: ${{ steps.project.outputs.dir }}
+        working-directory: ${{ steps.project.outputs.path }}
         run: flutter create --platforms=android .
-     
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          restore-keys: |
+            gradle-${{ runner.os }}-
+
       - name: Install dependencies
-        working-directory: ${{ steps.project.outputs.dir }}
+        working-directory: ${{ steps.project.outputs.path }}
         run: flutter pub get
 
       - name: Fix Flutter CardTheme compatibility
-        working-directory: ${{ steps.project.outputs.dir }}
-        run: sed -i 's/CardTheme(/CardThemeData(/g' lib/main.dart
+        working-directory: ${{ steps.project.outputs.path }}
+        run: |
+          sed -i 's/CardTheme(/CardThemeData(/g' lib/main.dart
 
       - name: Build release APK
-        working-directory: ${{ steps.project.outputs.dir }}
-        run: flutter build apk --release
+        working-directory: ${{ steps.project.outputs.path }}
+        run: |
+          for attempt in 1 2 3 4; do
+            echo "Build attempt $attempt"
+            if flutter build apk --release --no-pub --verbose; then
+              exit 0
+            fi
+            if [ "$attempt" -lt 4 ]; then
+              sleep $((attempt * 30))
+            fi
+          done
+          exit 1
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: CryptoLab-Android-APK
-          path: ${{ steps.project.outputs.dir }}/build/app/outputs/flutter-apk/app-release.apk
+          name: CryptoLab-APK
+          path: ${{ steps.project.outputs.path }}/build/app/outputs/flutter-apk/app-release.apk
           if-no-files-found: error
-          retention-days: 14
