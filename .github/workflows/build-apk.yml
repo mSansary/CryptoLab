@@ -87,6 +87,17 @@ jobs:
             sed -i 's/CardTheme(/CardThemeData(/g' lib/main.dart
           fi
 
+      - name: Fix HTTP request test compatibility
+        working-directory: ${{ steps.project.outputs.path }}
+        shell: bash
+        run: |
+          if [ -f test/market_data_service_test.dart ]; then
+            sed -i \
+              -e 's/request\.host/request.url.host/g' \
+              -e 's/request\.path/request.url.path/g' \
+              test/market_data_service_test.dart
+          fi
+      
       - name: Run tests
         working-directory: ${{ steps.project.outputs.path }}
         run: flutter test
