@@ -19,21 +19,41 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Extract project archives
+      - name: Select latest CryptoLab version
+        id: source
+        shell: bash
         run: |
-          find . -name "*.zip" -not -path "./.git/*" -print0 | while IFS= read -r -d '' archive; do
-            unzip -o "$archive" -d .
-          done
+          shopt -s nullglob
+          archives=(CryptoLab_Mobile_MVP_*.zip)
 
-      - name: Find Flutter project
-        id: project
-        run: |
-          mapfile -t files < <(find . -name pubspec.yaml -not -path "./.git/*")
-          if [ "${#files[@]}" -ne 1 ]; then
-            echo "Expected exactly one pubspec.yaml, found ${#files[@]}"
+          if [ ${#archives[@]} -eq 0 ]; then
+            echo "No CryptoLab version archive found!"
             exit 1
           fi
-          echo "path=$(dirname "${files[0]}")" >> "$GITHUB_OUTPUT"
+
+          latest=$(printf '%s\n' "${archives[@]}" | sort -V | tail -n 1)
+
+          echo "Selected version: $latest"
+          echo "archive=$latest" >> "$GITHUB_OUTPUT"
+
+      - name: Extract selected version
+        id: project
+        shell: bash
+        run: |
+          SOURCE_DIR="$RUNNER_TEMP/cryptolab-source"
+          mkdir -p "$SOURCE_DIR"
+
+          unzip -q "${{ steps.source.outputs.archive }}" -d "$SOURCE_DIR"
+
+          PUBSPEC=$(find "$SOURCE_DIR" -name pubspec.yaml -print -quit)
+
+          if [ -z "$PUBSPEC" ]; then
+            echo "pubspec.yaml not found!"
+            exit 1
+          fi
+
+          PROJECT_DIR=$(dirname "$PUBSPEC")
+          echo "path=$PROJECT_DIR" >> "$GITHUB_OUTPUT"
 
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
@@ -51,7 +71,7 @@ jobs:
           path: |
             ~/.gradle/caches
             ~/.gradle/wrapper
-          key: gradle-${{ runner.os }}-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          key: gradle-${{ runner.os }}-cryptolab-v1
           restore-keys: |
             gradle-${{ runner.os }}-
 
@@ -59,23 +79,34 @@ jobs:
         working-directory: ${{ steps.project.outputs.path }}
         run: flutter pub get
 
-      - name: Fix Flutter CardTheme compatibility
+      - name: Fix Flutter compatibility
         working-directory: ${{ steps.project.outputs.path }}
+        shell: bash
         run: |
-          sed -i 's/CardTheme(/CardThemeData(/g' lib/main.dart
+          if grep -q 'CardTheme(' lib/main.dart; then
+            sed -i 's/CardTheme(/CardThemeData(/g' lib/main.dart
+          fi
+
+      - name: Run tests
+        working-directory: ${{ steps.project.outputs.path }}
+        run: flutter test
 
       - name: Build release APK
         working-directory: ${{ steps.project.outputs.path }}
+        shell: bash
         run: |
           for attempt in 1 2 3 4; do
             echo "Build attempt $attempt"
-            if flutter build apk --release --no-pub --verbose; then
+
+            if flutter build apk --release --no-pub; then
               exit 0
             fi
+
             if [ "$attempt" -lt 4 ]; then
               sleep $((attempt * 30))
             fi
           done
+
           exit 1
 
       - name: Upload APK
